@@ -10,33 +10,40 @@ import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.delay
 
-private val Bg = Color(0xFF101410)
-private val Panel = Color(0xFF1B241D)
-private val Green = Color(0xFF7CDB8A)
-private val White = Color(0xFFF2F5F2)
-private val Muted = Color(0xFF9AA79C)
+private val Bg = Color(0xFF0D120F)
+private val SurfaceDark = Color(0xFF17221B)
+private val SurfaceSoft = Color(0xFF202D24)
+private val Green = Color(0xFF91D6A0)
+private val GreenDim = Color(0xFF426D4B)
+private val White = Color(0xFFF1F5F1)
+private val Muted = Color(0xFF9AA99D)
 
 private data class Song(
     val id: Long,
@@ -69,33 +76,15 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme(colorScheme = darkColorScheme(
-                background = Bg, surface = Panel, primary = Green,
-                onBackground = White, onSurface = White
+                background = Bg,
+                surface = SurfaceDark,
+                primary = Green,
+                onBackground = White,
+                onSurface = White
             )) {
-                MusicLibraryScreen(
-                    onPlay = { list, index -> playSongs(list, index) },
-                    controllerProvider = { mediaController }
-                )
+                EnjiwsApp(controllerProvider = { mediaController })
             }
         }
-    }
-
-    private fun playSongs(songs: List<Song>, index: Int) {
-        val controller = mediaController ?: return
-        if (songs.isEmpty()) return
-        val items = songs.map { song ->
-            MediaItem.Builder()
-                .setMediaId(song.id.toString())
-                .setUri(song.uri)
-                .setMediaMetadata(MediaMetadata.Builder()
-                    .setTitle(song.title)
-                    .setArtist(song.artist)
-                    .build())
-                .build()
-        }
-        controller.setMediaItems(items, index.coerceIn(0, items.lastIndex), 0L)
-        controller.prepare()
-        controller.play()
     }
 
     override fun onDestroy() {
@@ -105,16 +94,19 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun MusicLibraryScreen(
-    onPlay: (List<Song>, Int) -> Unit,
-    controllerProvider: () -> MediaController?
-) {
-    val context = LocalContext.current
+private fun EnjiwsApp(controllerProvider: () -> MediaController?) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var songs by remember { mutableStateOf<List<Song>>(emptyList()) }
     var query by remember { mutableStateOf("") }
-    var refreshKey by remember { mutableIntStateOf(0) }
-    var currentTitle by remember { mutableStateOf("Belum ada lagu diputar") }
-    var playing by remember { mutableStateOf(false) }
+    var scanKey by remember { mutableIntStateOf(0) }
+    var showPlayer by remember { mutableStateOf(false) }
+    var currentTitle by remember { mutableStateOf("Pilih lagu untuk memulai") }
+    var currentArtist by remember { mutableStateOf("ENJIWS MUSIC") }
+    var isPlaying by remember { mutableStateOf(false) }
+    var position by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+    var shuffle by remember { mutableStateOf(false) }
+    var repeatMode by remember { mutableIntStateOf(Player.REPEAT_MODE_OFF) }
 
     fun scanLibrary() {
         val result = mutableListOf<Song>()
@@ -127,7 +119,8 @@ private fun MusicLibraryScreen(
         )
         try {
             context.contentResolver.query(
-                collection, projection, "${MediaStore.Audio.Media.IS_MUSIC} != 0",
+                collection, projection,
+                "${MediaStore.Audio.Media.IS_MUSIC} != 0",
                 null, "${MediaStore.Audio.Media.TITLE} COLLATE NOCASE ASC"
             )?.use { cursor ->
                 val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
@@ -136,12 +129,12 @@ private fun MusicLibraryScreen(
                 val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                 while (cursor.moveToNext()) {
                     val id = cursor.getLong(idCol)
-                    val title = cursor.getString(titleCol) ?: "Judul tidak diketahui"
                     val rawArtist = cursor.getString(artistCol)
-                    val artist = if (rawArtist.isNullOrBlank() || rawArtist == "<unknown>")
-                        "Artis tidak diketahui" else rawArtist
                     result.add(Song(
-                        id, title, artist, cursor.getLong(durationCol),
+                        id,
+                        cursor.getString(titleCol) ?: "Judul tidak diketahui",
+                        if (rawArtist.isNullOrBlank() || rawArtist == "<unknown>") "Artis tidak diketahui" else rawArtist,
+                        cursor.getLong(durationCol),
                         ContentUris.withAppendedId(collection, id)
                     ))
                 }
@@ -150,7 +143,23 @@ private fun MusicLibraryScreen(
         songs = result
     }
 
-    LaunchedEffect(refreshKey) { scanLibrary() }
+    LaunchedEffect(scanKey) { scanLibrary() }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            val player = controllerProvider()
+            if (player != null) {
+                currentTitle = player.mediaMetadata.title?.toString() ?: "Pilih lagu untuk memulai"
+                currentArtist = player.mediaMetadata.artist?.toString() ?: "ENJIWS MUSIC"
+                isPlaying = player.isPlaying
+                position = player.currentPosition.coerceAtLeast(0L)
+                duration = player.duration.takeIf { it > 0L } ?: 0L
+                shuffle = player.shuffleModeEnabled
+                repeatMode = player.repeatMode
+            }
+            delay(450)
+        }
+    }
 
     val filtered = remember(songs, query) {
         if (query.isBlank()) songs else songs.filter {
@@ -158,92 +167,244 @@ private fun MusicLibraryScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            val c = controllerProvider()
-            if (c != null) {
-                currentTitle = c.mediaMetadata.title?.toString() ?: "Belum ada lagu diputar"
-                playing = c.isPlaying
-            }
-            kotlinx.coroutines.delay(700)
-        }
+    fun togglePlayback() {
+        controllerProvider()?.let { if (it.isPlaying) it.pause() else it.play() }
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("ENJIWS", color = Green, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-                Text("Music", color = White, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-            }
-            TextButton(onClick = { refreshKey++ }) { Text("Pindai", color = Green) }
-        }
-        Spacer(Modifier.height(18.dp))
-        Surface(color = Panel, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-            BasicTextField(
-                value = query, onValueChange = { query = it }, singleLine = true,
-                textStyle = androidx.compose.ui.text.TextStyle(color = White, fontSize = 15.sp),
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                decorationBox = { inner ->
-                    if (query.isEmpty()) Text("Cari lagu atau artis...", color = Muted)
-                    inner()
+    fun seekTo(value: Float) {
+        controllerProvider()?.seekTo(value.toLong())
+    }
+
+    Box(Modifier.fillMaxSize().background(Bg)) {
+        if (showPlayer) {
+            FullPlayer(
+                title = currentTitle,
+                artist = currentArtist,
+                playing = isPlaying,
+                position = position,
+                duration = duration,
+                shuffle = shuffle,
+                repeatMode = repeatMode,
+                onBack = { showPlayer = false },
+                onPlayPause = { togglePlayback() },
+                onPrevious = { controllerProvider()?.seekToPreviousMediaItem() },
+                onNext = { controllerProvider()?.seekToNextMediaItem() },
+                onSeek = { seekTo(it) },
+                onShuffle = {
+                    controllerProvider()?.let {
+                        it.shuffleModeEnabled = !it.shuffleModeEnabled
+                        shuffle = it.shuffleModeEnabled
+                    }
+                },
+                onRepeat = {
+                    controllerProvider()?.let {
+                        it.repeatMode = when (it.repeatMode) {
+                            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                            else -> Player.REPEAT_MODE_OFF
+                        }
+                        repeatMode = it.repeatMode
+                    }
                 }
             )
-        }
-        Spacer(Modifier.height(14.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Perpustakaan", color = White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.width(8.dp))
-            Text("${filtered.size} lagu", color = Muted, fontSize = 12.sp)
-        }
-        Spacer(Modifier.height(8.dp))
-        if (filtered.isEmpty()) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text(
-                    if (songs.isEmpty()) "Belum ada lagu ditemukan.\nIzinkan akses audio, lalu tekan Pindai."
-                    else "Lagu tidak ditemukan.",
-                    color = Muted
-                )
-            }
         } else {
-            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp)) {
-                itemsIndexed(filtered, key = { _, song -> song.id }) { index, song ->
-                    Row(
-                        Modifier.fillMaxWidth().clickable { onPlay(filtered, index) }.padding(vertical = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Surface(color = Panel, shape = RoundedCornerShape(10.dp), modifier = Modifier.size(44.dp)) {
-                            Box(contentAlignment = Alignment.Center) { Text("♫", color = Green, fontSize = 23.sp) }
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(song.title, color = White, fontWeight = FontWeight.Medium, maxLines = 1)
-                            Text(song.artist, color = Muted, fontSize = 12.sp, maxLines = 1)
-                        }
-                        Text(formatDuration(song.duration), color = Muted, fontSize = 11.sp)
+            Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 18.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("ENJIWS  /  SOUND", color = Green, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.5.sp)
+                        Text("Your library.", color = White, fontSize = 29.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Ruang kecil untuk musikmu.", color = Muted, fontSize = 13.sp)
                     }
-                    HorizontalDivider(color = Color(0xFF29332B))
+                    TextButton(onClick = { scanKey++ }) { Text("PINDAI", color = Green, fontSize = 12.sp) }
                 }
-            }
-        }
-        Surface(color = Panel, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("SEDANG DIPUTAR", color = Green, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                    Text(currentTitle, color = White, maxLines = 1, fontSize = 13.sp)
+                Spacer(Modifier.height(22.dp))
+                Surface(color = SurfaceDark, shape = RoundedCornerShape(15.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(horizontal = 15.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("⌕", color = Green, fontSize = 23.sp)
+                        Spacer(Modifier.width(10.dp))
+                        Box(Modifier.weight(1f)) {
+                            if (query.isEmpty()) Text("Cari judul atau artis", color = Muted, fontSize = 14.sp)
+                            BasicTextField(
+                                value = query, onValueChange = { query = it }, singleLine = true,
+                                textStyle = androidx.compose.ui.text.TextStyle(color = White, fontSize = 14.sp),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
                 }
-                IconButton(onClick = {
-                    controllerProvider()?.let { if (it.isPlaying) it.pause() else it.play() }
-                    playing = !(controllerProvider()?.isPlaying ?: false)
-                }) { Text(if (playing) "Ⅱ" else "▶", color = Green, fontSize = 20.sp) }
-                IconButton(onClick = { controllerProvider()?.seekToNextMediaItem() }) {
-                    Text("»", color = Green, fontSize = 24.sp)
+                Spacer(Modifier.height(20.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("KOLEKSI", color = White, fontSize = 13.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.8.sp)
+                    Spacer(Modifier.width(9.dp))
+                    Text("${filtered.size} TRACKS", color = Muted, fontSize = 10.sp, letterSpacing = 1.sp)
+                }
+                Spacer(Modifier.height(8.dp))
+                if (filtered.isEmpty()) {
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text(if (songs.isEmpty()) "Belum ada musik ditemukan.\nTekan PINDAI untuk mencoba lagi." else "Tidak ada hasil pencarian.", color = Muted)
+                    }
+                } else {
+                    LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 14.dp)) {
+                        itemsIndexed(filtered, key = { _, song -> song.id }) { index, song ->
+                            Row(
+                                Modifier.fillMaxWidth().clickable {
+                                    val player = controllerProvider()
+                                    if (player != null) {
+                                        val queue = filtered.map {
+                                            MediaItem.Builder().setMediaId(it.id.toString()).setUri(it.uri)
+                                                .setMediaMetadata(MediaMetadata.Builder().setTitle(it.title).setArtist(it.artist).build())
+                                                .build()
+                                        }
+                                        player.setMediaItems(queue, index, 0L)
+                                        player.prepare()
+                                        player.play()
+                                        showPlayer = true
+                                    }
+                                }.padding(vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    Modifier.size(46.dp).clip(RoundedCornerShape(13.dp))
+                                        .background(Brush.linearGradient(listOf(SurfaceSoft, GreenDim))),
+                                    contentAlignment = Alignment.Center
+                                ) { Text("♫", color = Green, fontSize = 23.sp) }
+                                Spacer(Modifier.width(13.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(song.title, color = White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                                    Spacer(Modifier.height(3.dp))
+                                    Text(song.artist, color = Muted, fontSize = 11.sp, maxLines = 1)
+                                }
+                                Text(formatTime(song.duration), color = Muted, fontSize = 11.sp)
+                            }
+                            HorizontalDivider(color = Color(0xFF253129), thickness = 0.6.dp)
+                        }
+                    }
+                }
+                Surface(
+                    color = SurfaceDark,
+                    shape = RoundedCornerShape(18.dp),
+                    modifier = Modifier.fillMaxWidth().clickable { showPlayer = true }
+                ) {
+                    Column(Modifier.padding(horizontal = 15.dp, vertical = 12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.size(42.dp).clip(RoundedCornerShape(11.dp)).background(SurfaceSoft),
+                                contentAlignment = Alignment.Center
+                            ) { Text("♫", color = Green, fontSize = 21.sp) }
+                            Spacer(Modifier.width(11.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(currentTitle, color = White, maxLines = 1, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                                Text(currentArtist, color = Muted, maxLines = 1, fontSize = 10.sp)
+                            }
+                            IconButton(onClick = { togglePlayback() }) {
+                                Text(if (isPlaying) "Ⅱ" else "▶", color = Green, fontSize = 18.sp)
+                            }
+                            IconButton(onClick = { controllerProvider()?.seekToNextMediaItem() }) {
+                                Text("»", color = Green, fontSize = 22.sp)
+                            }
+                        }
+                        LinearProgressIndicator(
+                            progress = { if (duration > 0L) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f },
+                            modifier = Modifier.fillMaxWidth().height(2.dp).clip(CircleShape),
+                            color = Green,
+                            trackColor = SurfaceSoft
+                        )
+                    }
                 }
             }
         }
     }
 }
 
-private fun formatDuration(ms: Long): String {
+@Composable
+private fun FullPlayer(
+    title: String,
+    artist: String,
+    playing: Boolean,
+    position: Long,
+    duration: Long,
+    shuffle: Boolean,
+    repeatMode: Int,
+    onBack: () -> Unit,
+    onPlayPause: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onSeek: (Float) -> Unit,
+    onShuffle: () -> Unit,
+    onRepeat: () -> Unit
+) {
+    var sliderValue by remember { mutableFloatStateOf(0f) }
+    var dragging by remember { mutableStateOf(false) }
+    LaunchedEffect(position, dragging) {
+        if (!dragging) sliderValue = position.toFloat()
+    }
+
+    Column(
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(listOf(Color(0xFF1B3022), Bg, Bg))
+        ).padding(horizontal = 24.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("⌄  KEMBALI", color = Green, fontSize = 12.sp) }
+            Spacer(Modifier.weight(1f))
+            Text("NOW PLAYING", color = Muted, fontSize = 10.sp, letterSpacing = 2.sp)
+        }
+        Spacer(Modifier.weight(1f))
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(28.dp))
+                .background(Brush.linearGradient(listOf(Color(0xFF314D38), Color(0xFF17251B), Color(0xFF263B2C)))),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("e", color = Green.copy(alpha = 0.9f), fontSize = 150.sp, fontWeight = FontWeight.Light)
+            Text("ENJIWS", color = White.copy(alpha = 0.55f), fontSize = 10.sp, letterSpacing = 5.sp,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp))
+        }
+        Spacer(Modifier.height(34.dp))
+        Column(Modifier.fillMaxWidth()) {
+            Text(title, color = White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+            Spacer(Modifier.height(5.dp))
+            Text(artist, color = Muted, fontSize = 14.sp)
+        }
+        Spacer(Modifier.height(22.dp))
+        Slider(
+            value = sliderValue.coerceIn(0f, duration.coerceAtLeast(1L).toFloat()),
+            onValueChange = { sliderValue = it; dragging = true },
+            onValueChangeFinished = { onSeek(sliderValue); dragging = false },
+            valueRange = 0f..duration.coerceAtLeast(1L).toFloat(),
+            enabled = duration > 0L,
+            colors = SliderDefaults.colors(
+                thumbColor = Green, activeTrackColor = Green, inactiveTrackColor = SurfaceSoft
+            )
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(formatTime(position), color = Muted, fontSize = 11.sp)
+            Text(formatTime(duration), color = Muted, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(18.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onShuffle) { Text(if (shuffle) "SHUFFLE ON" else "SHUFFLE", color = if (shuffle) Green else Muted, fontSize = 10.sp) }
+            TextButton(onClick = onPrevious) { Text("|◀", color = White, fontSize = 23.sp) }
+            Surface(color = Green, shape = CircleShape, modifier = Modifier.size(68.dp).clickable { onPlayPause() }) {
+                Box(contentAlignment = Alignment.Center) { Text(if (playing) "Ⅱ" else "▶", color = Bg, fontSize = 25.sp) }
+            }
+            TextButton(onClick = onNext) { Text("▶|", color = White, fontSize = 23.sp) }
+            TextButton(onClick = onRepeat) {
+                Text(when (repeatMode) {
+                    Player.REPEAT_MODE_ONE -> "REPEAT 1"
+                    Player.REPEAT_MODE_ALL -> "REPEAT ALL"
+                    else -> "REPEAT"
+                }, color = if (repeatMode != Player.REPEAT_MODE_OFF) Green else Muted, fontSize = 9.sp)
+            }
+        }
+        Spacer(Modifier.weight(1f))
+        Text("MADE FOR YOUR MOMENTS", color = Muted.copy(alpha = 0.65f), fontSize = 9.sp, letterSpacing = 2.sp)
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+private fun formatTime(ms: Long): String {
+    if (ms <= 0L) return "0:00"
     val seconds = (ms / 1000).toInt()
     return "%d:%02d".format(seconds / 60, seconds % 60)
 }
