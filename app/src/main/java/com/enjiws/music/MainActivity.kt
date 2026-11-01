@@ -100,6 +100,7 @@ private fun EnjiwsApp(controllerProvider: () -> MediaController?) {
     var query by remember { mutableStateOf("") }
     var scanKey by remember { mutableIntStateOf(0) }
     var showPlayer by remember { mutableStateOf(false) }
+    var showOnline by remember { mutableStateOf(false) }
     var currentTitle by remember { mutableStateOf("Pilih lagu untuk memulai") }
     var currentArtist by remember { mutableStateOf("ENJIWS MUSIC") }
     var isPlaying by remember { mutableStateOf(false) }
@@ -207,6 +208,15 @@ private fun EnjiwsApp(controllerProvider: () -> MediaController?) {
                     }
                 }
             )
+        } else if (showOnline) {
+            OnlineMusicScreen(
+                controllerProvider = controllerProvider,
+                currentTitle = currentTitle,
+                currentArtist = currentArtist,
+                duration = duration,
+                position = position,
+                onBack = { showOnline = false }
+            )
         } else {
             Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 18.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -215,7 +225,10 @@ private fun EnjiwsApp(controllerProvider: () -> MediaController?) {
                         Text("Your library.", color = White, fontSize = 29.sp, fontWeight = FontWeight.SemiBold)
                         Text("Ruang kecil untuk musikmu.", color = Muted, fontSize = 13.sp)
                     }
-                    TextButton(onClick = { scanKey++ }) { Text("PINDAI", color = Green, fontSize = 12.sp) }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { scanKey++ }) { Text("PINDAI", color = Green, fontSize = 11.sp) }
+                        TextButton(onClick = { showOnline = true }) { Text("ONLINE ↗", color = Green, fontSize = 11.sp) }
+                    }
                 }
                 Spacer(Modifier.height(22.dp))
                 Surface(color = SurfaceDark, shape = RoundedCornerShape(15.dp), modifier = Modifier.fillMaxWidth()) {
