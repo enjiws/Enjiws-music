@@ -1,7 +1,7 @@
 package com.enjiws.music
 
-import android.net.Uri
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,7 +13,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -44,53 +43,35 @@ private data class OnlineTrack(
     val durationSeconds: Int,
     val source: String,
     val storeUrl: String = "",
-    val youtubeUrl: String = ""
+    val youtubeUrl: String = "",
+    val artworkUrl: String = ""
 )
 
-private data class LyricLine(val timeMs: Long, val text: String)
+private fun JSONObject.str(key: String): String = optString(key).let { if (it == "null") "" else it }
 
 @Composable
-fun OnlineMusicScreen(
-    controllerProvider: () -> MediaController?,
-    currentTitle: String,
-    currentArtist: String,
-    duration: Long,
-    position: Long,
-    onBack: () -> Unit
-) {
+fun OnlineMusicScreen(controllerProvider: () -> MediaController?) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var catalogQuery by remember { mutableStateOf("") }
     var clientId by remember { mutableStateOf("415f93ab") }
     var streamUrl by remember { mutableStateOf("") }
     var tracks by remember { mutableStateOf<List<OnlineTrack>>(emptyList()) }
-    var lyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
-    var plainLyrics by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Cari katalog global: YouTube, Apple Music, Jamendo, dan Audius.") }
-    var lyricsStatus by remember { mutableStateOf("Lirik belum dicari.") }
     var busy by remember { mutableStateOf(false) }
-    var lyricsBusy by remember { mutableStateOf(false) }
-    var showLyrics by remember { mutableStateOf(false) }
 
-    val activeLine = remember(lyrics, position) {
-        lyrics.indexOfLast { it.timeMs <= position }.coerceAtLeast(0)
-    }
-
-    fun playUrl(url: String, title: String, artist: String) {
+    fun playUrl(url: String, title: String, artist: String, artwork: String = "") {
         val player = controllerProvider()
         if (player == null) {
             status = "Pemutar belum siap. Coba lagi sebentar."
             return
         }
         try {
-            val item = MediaItem.Builder()
-                .setUri(url)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(title.ifBlank { "Online audio" })
-                        .setArtist(artist.ifBlank { "ENJIWS ONLINE" })
-                        .build()
-                ).build()
+            val meta = MediaMetadata.Builder()
+                .setTitle(title.ifBlank { "Online audio" })
+                .setArtist(artist.ifBlank { "ENJIWS ONLINE" })
+            if (artwork.startsWith("http")) meta.setArtworkUri(Uri.parse(artwork))
+            val item = MediaItem.Builder().setUri(url).setMediaMetadata(meta.build()).build()
             player.setMediaItem(item)
             player.prepare()
             player.play()
@@ -103,11 +84,7 @@ fun OnlineMusicScreen(
     Column(
         Modifier.fillMaxSize().background(Color(0xFF0D120F)).padding(horizontal = 18.dp, vertical = 14.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            TextButton(onClick = onBack) { Text("‹ KEMBALI", color = Color(0xFF91D6A0)) }
-            Spacer(Modifier.weight(1f))
-            Text("ENJIWS / ONLINE", color = Color(0xFF91D6A0), fontSize = 11.sp, letterSpacing = 1.8.sp)
-        }
+        Text("ENJIWS / ONLINE", color = Color(0xFF91D6A0), fontSize = 11.sp, letterSpacing = 1.8.sp)
         Text("Music beyond.", color = Color(0xFFF1F5F1), fontSize = 27.sp, fontWeight = FontWeight.SemiBold)
         Text("Streaming dan lirik, dalam satu ruang.", color = Color(0xFF9AA99D), fontSize = 12.sp)
         Spacer(Modifier.height(14.dp))
@@ -137,7 +114,7 @@ fun OnlineMusicScreen(
                 InputPanel(value = catalogQuery, onValueChange = { catalogQuery = it }, hint = "Cari judul, artis, atau genre")
                 Spacer(Modifier.height(7.dp))
                 InputPanel(value = clientId, onValueChange = { clientId = it }, hint = "Jamendo client_id")
-                Text("Apple Music untuk penemuan lagu mainstream; Jamendo + Audius untuk stream yang tersedia. ID Jamendo bisa diganti.", color = Color(0xFF9AA99D), fontSize = 10.sp)
+                Text("YouTube, Jamendo, dan Audius bisa diputar; Apple Music membuka halaman lagu. ID Jamendo bisa diganti.", color = Color(0xFF9AA99D), fontSize = 10.sp)
                 Spacer(Modifier.height(7.dp))
                 Button(
                     enabled = !busy && catalogQuery.isNotBlank(),
@@ -146,11 +123,13 @@ fun OnlineMusicScreen(
                             busy = true
                             status = "Mencari YouTube, Apple Music, Jamendo, dan Audius..."
                             try {
-                                val youtubeResult = runCatching { searchYouTube(catalogQuery.trim()) }
-                                val appleResult = runCatching { searchAppleCatalog(catalogQuery.trim()) }
-                                val jamendoResult = runCatching { if (clientId.isBlank()) emptyList() else searchJamendo(catalogQuery.trim(), clientId.trim()) }
-                                val audiusResult = runCatching { searchAudius(catalogQuery.trim()) }
-                                tracks = (youtubeResult.getOrDefault(emptyList()) + appleResult.getOrDefault(emptyList()) + jamendoResult.getOrDefault(emptyList()) + audiusResult.getOrDefault(emptyList()))
+                                val q = catalogQuery.trim()
+                                val youtubeResult = runCatching { searchYouTube(q) }
+                                val appleResult = runCatching { searchAppleCatalog(q) }
+                                val jamendoResult = runCatching { if (clientId.isBlank()) emptyList() else searchJamendo(q, clientId.trim()) }
+                                val audiusResult = runCatching { searchAudius(q) }
+                                tracks = (youtubeResult.getOrDefault(emptyList()) + appleResult.getOrDefault(emptyList()) +
+                                    jamendoResult.getOrDefault(emptyList()) + audiusResult.getOrDefault(emptyList()))
                                     .distinctBy { it.title.lowercase() + ":" + it.artist.lowercase() + ":" + it.source }
                                 status = when {
                                     tracks.isNotEmpty() -> "Ditemukan ${tracks.size} hasil. YouTube, Jamendo, dan Audius dapat diputar; Apple Music membuka halaman lagu."
@@ -167,89 +146,43 @@ fun OnlineMusicScreen(
                 Spacer(Modifier.height(8.dp))
             }
             items(tracks) { track ->
-                Column(
+                Row(
                     Modifier.fillMaxWidth().clickable {
                         if (track.youtubeUrl.isNotBlank()) {
                             scope.launch {
                                 status = "Mengambil audio YouTube: ${track.title}..."
                                 try {
                                     val url = resolveYoutubeAudio(track.youtubeUrl)
-                                    playUrl(url, track.title, track.artist)
+                                    playUrl(url, track.title, track.artist, track.artworkUrl)
                                 } catch (e: Exception) {
                                     status = "Gagal ambil audio YouTube: ${e.message ?: "coba lagi / update NewPipeExtractor"}"
                                 }
                             }
                         } else if (track.audioUrl.isNotBlank()) {
-                            playUrl(track.audioUrl, track.title, track.artist)
+                            playUrl(track.audioUrl, track.title, track.artist, track.artworkUrl)
                         } else if (track.storeUrl.startsWith("https://")) {
                             runCatching {
                                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(track.storeUrl)))
-                            }.onFailure {
-                                status = "Tidak dapat membuka halaman lagu."
-                            }
+                            }.onFailure { status = "Tidak dapat membuka halaman lagu." }
                         }
-                    }.padding(vertical = 10.dp)
+                    }.padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(track.title, color = Color(0xFFF1F5F1), fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text(
-                        "${track.artist}  ·  ${if (track.durationSeconds > 0) "${track.durationSeconds / 60}:${(track.durationSeconds % 60).toString().padStart(2, '0')}  ·  " else ""}${track.source}${if (track.audioUrl.isBlank() && track.youtubeUrl.isBlank()) " · BUKA LAGU" else " · PUTAR"}",
-                        color = Color(0xFF9AA99D), fontSize = 11.sp
-                    )
+                    RemoteArtThumb(track.artworkUrl, 46.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(track.title, color = Color(0xFFF1F5F1), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                        Text(
+                            "${track.artist}  ·  ${if (track.durationSeconds > 0) "${track.durationSeconds / 60}:${(track.durationSeconds % 60).toString().padStart(2, '0')}  ·  " else ""}${track.source}${if (track.audioUrl.isBlank() && track.youtubeUrl.isBlank()) " · BUKA LAGU" else " · PUTAR"}",
+                            color = Color(0xFF9AA99D), fontSize = 11.sp, maxLines = 1
+                        )
+                    }
                 }
                 HorizontalDivider(color = Color(0xFF253129))
             }
             item {
                 Spacer(Modifier.height(12.dp))
-                HorizontalDivider(color = Color(0xFF253129))
-                Spacer(Modifier.height(16.dp))
-                Text("LIRIK ONLINE / LRC", color = Color(0xFF91D6A0), fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp)
-                Spacer(Modifier.height(6.dp))
-                Text("Lagu sekarang: $currentTitle", color = Color(0xFFF1F5F1), fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                Text(currentArtist, color = Color(0xFF9AA99D), fontSize = 11.sp)
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    enabled = !lyricsBusy && currentTitle != "Pilih lagu untuk memulai",
-                    onClick = {
-                        scope.launch {
-                            lyricsBusy = true
-                            showLyrics = true
-                            lyricsStatus = "Mencari lirik..."
-                            lyrics = emptyList()
-                            plainLyrics = ""
-                            try {
-                                val result = findLyrics(currentTitle, currentArtist, duration)
-                                lyrics = result.first
-                                plainLyrics = result.second
-                                lyricsStatus = when {
-                                    lyrics.isNotEmpty() -> "Lirik tersinkronisasi ditemukan."
-                                    plainLyrics.isNotBlank() -> "Lirik ditemukan, tetapi tidak memiliki timestamp."
-                                    else -> "Lirik belum tersedia untuk lagu ini."
-                                }
-                            } catch (e: Exception) {
-                                lyricsStatus = "Pencarian lirik gagal: ${e.message ?: "periksa koneksi"}"
-                            } finally { lyricsBusy = false }
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF20382A)),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(if (lyricsBusy) "MENCARI LIRIK..." else "CARI LIRIK LAGU SEKARANG", color = Color(0xFF91D6A0)) }
-                Text(lyricsStatus, color = Color(0xFF9AA99D), fontSize = 11.sp)
-                if (showLyrics && lyrics.isNotEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                    lyrics.forEachIndexed { index, line ->
-                        Text(
-                            line.text.ifBlank { "♪" },
-                            color = if (index == activeLine) Color(0xFF91D6A0) else Color(0xFF9AA99D),
-                            fontSize = if (index == activeLine) 17.sp else 14.sp,
-                            fontWeight = if (index == activeLine) FontWeight.Bold else FontWeight.Normal,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)
-                        )
-                    }
-                } else if (showLyrics && plainLyrics.isNotBlank()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(plainLyrics, color = Color(0xFFF1F5F1), fontSize = 14.sp, lineHeight = 22.sp)
-                }
-                Text("Lirik disediakan oleh LRCLIB. Ketersediaan dan kecocokan bergantung pada katalog mereka.", color = Color(0xFF9AA99D), fontSize = 10.sp)
+                Text("Lirik tersinkron tampil di layar Now Playing (tombol LIRIK). Sumber lirik: LRCLIB.", color = Color(0xFF9AA99D), fontSize = 10.sp)
             }
         }
     }
@@ -286,7 +219,8 @@ private suspend fun searchYouTube(query: String): List<OnlineTrack> = withContex
                 audioUrl = "",
                 durationSeconds = it.duration.toInt().coerceAtLeast(0),
                 source = "YouTube",
-                youtubeUrl = it.url
+                youtubeUrl = it.url,
+                artworkUrl = it.thumbnails.maxByOrNull { img -> img.height }?.url.orEmpty()
             )
         }
 }
@@ -305,7 +239,6 @@ private suspend fun resolveYoutubeAudio(videoUrl: String): String = withContext(
 
 private suspend fun searchAppleCatalog(query: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
     val encodedQuery = URLEncoder.encode(query, "UTF-8")
-    // Search several storefronts to widen regional discovery.
     val storefronts = listOf("us", "id", "gb", "jp", "kr")
     val collected = mutableListOf<OnlineTrack>()
     for (country in storefronts) {
@@ -325,7 +258,8 @@ private suspend fun searchAppleCatalog(query: String): List<OnlineTrack> = withC
                         audioUrl = "",
                         durationSeconds = item.optLong("trackTimeMillis", 0L).div(1000L).toInt(),
                         source = "Apple Music",
-                        storeUrl = storeUrl
+                        storeUrl = storeUrl,
+                        artworkUrl = item.str("artworkUrl100").replace("100x100", "300x300")
                     )
                 )
             }
@@ -350,7 +284,8 @@ private suspend fun searchJamendo(query: String, clientId: String): List<OnlineT
                     artist = item.optString("artist_name", "Unknown artist"),
                     audioUrl = audio,
                     durationSeconds = item.optInt("duration", 0),
-                    source = "Jamendo"
+                    source = "Jamendo",
+                    artworkUrl = item.str("image").ifBlank { item.str("album_image") }
                 )
             )
         }
@@ -368,38 +303,19 @@ private suspend fun searchAudius(query: String): List<OnlineTrack> = withContext
             val id = item.optString("id")
             if (id.isBlank() || id == "null" || item.optBoolean("is_stream_gated", false)) continue
             val user = item.optJSONObject("user")
-            val title = item.optString("title", "Unknown title")
-            val artist = user?.optString("name", "Unknown artist") ?: "Unknown artist"
+            val artwork = item.optJSONObject("artwork")
             add(
                 OnlineTrack(
-                    title = title,
-                    artist = artist,
+                    title = item.optString("title", "Unknown title"),
+                    artist = user?.optString("name", "Unknown artist") ?: "Unknown artist",
                     audioUrl = "https://api.audius.co/v1/tracks/$id/stream",
                     durationSeconds = item.optInt("duration", 0),
-                    source = "Audius"
+                    source = "Audius",
+                    artworkUrl = artwork?.let { a -> a.str("480x480").ifBlank { a.str("150x150") } }.orEmpty()
                 )
             )
         }
     }
-}
-
-private suspend fun findLyrics(title: String, artist: String, durationMs: Long): Pair<List<LyricLine>, String> = withContext(Dispatchers.IO) {
-    val params = "track_name=${URLEncoder.encode(title, "UTF-8")}&artist_name=${URLEncoder.encode(artist, "UTF-8")}" +
-        if (durationMs > 0L) "&duration=${durationMs / 1000L}" else ""
-    val endpoint = "https://lrclib.net/api/get?$params"
-    val json = httpGet(endpoint)
-    val synced = json.optString("syncedLyrics").takeUnless { it == "null" } ?: ""
-    val plain = json.optString("plainLyrics").takeUnless { it == "null" } ?: ""
-    val regex = Regex("""\[(\d{2}):(\d{2})(?:\.(\d{1,3}))?\]\s*(.*)""")
-    val lines = synced.lines().mapNotNull { raw ->
-        val match = regex.matchEntire(raw.trim()) ?: return@mapNotNull null
-        val minutes = match.groupValues[1].toLong()
-        val seconds = match.groupValues[2].toLong()
-        val fraction = match.groupValues[3].padEnd(3, '0').take(3).toLongOrNull() ?: 0L
-        val text = match.groupValues[4]
-        LyricLine((minutes * 60_000L) + (seconds * 1_000L) + fraction, text)
-    }.sortedBy { it.timeMs }
-    Pair(lines, plain)
 }
 
 private fun httpGet(address: String): JSONObject {
@@ -407,7 +323,7 @@ private fun httpGet(address: String): JSONObject {
         requestMethod = "GET"
         connectTimeout = 12000
         readTimeout = 15000
-        setRequestProperty("User-Agent", "EnjiwsMusic/1.6 (https://github.com/enjiws/Enjiws-music)")
+        setRequestProperty("User-Agent", "EnjiwsMusic/1.8 (https://github.com/enjiws/Enjiws-music)")
         setRequestProperty("Accept", "application/json")
     }
     try {
