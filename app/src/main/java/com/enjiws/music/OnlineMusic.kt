@@ -26,6 +26,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import org.schabi.newpipe.extractor.MediaFormat
+import org.schabi.newpipe.extractor.ServiceList
+import org.schabi.newpipe.extractor.search.SearchInfo
+import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeSearchQueryHandlerFactory
+import org.schabi.newpipe.extractor.stream.DeliveryMethod
+import org.schabi.newpipe.extractor.stream.StreamInfo
+import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -36,7 +43,8 @@ private data class OnlineTrack(
     val audioUrl: String,
     val durationSeconds: Int,
     val source: String,
-    val storeUrl: String = ""
+    val storeUrl: String = "",
+    val youtubeUrl: String = ""
 )
 
 private data class LyricLine(val timeMs: Long, val text: String)
@@ -54,12 +62,11 @@ fun OnlineMusicScreen(
     val context = LocalContext.current
     var catalogQuery by remember { mutableStateOf("") }
     var clientId by remember { mutableStateOf("415f93ab") }
-    var youtubeApiKey by remember { mutableStateOf("") }
     var streamUrl by remember { mutableStateOf("") }
     var tracks by remember { mutableStateOf<List<OnlineTrack>>(emptyList()) }
     var lyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var plainLyrics by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("Cari katalog global: Apple Music, Jamendo, dan Audius. Putar sumber yang menyediakan stream.") }
+    var status by remember { mutableStateOf("Cari katalog global: YouTube, Apple Music, Jamendo, dan Audius.") }
     var lyricsStatus by remember { mutableStateOf("Lirik belum dicari.") }
     var busy by remember { mutableStateOf(false) }
     var lyricsBusy by remember { mutableStateOf(false) }
@@ -130,25 +137,24 @@ fun OnlineMusicScreen(
                 InputPanel(value = catalogQuery, onValueChange = { catalogQuery = it }, hint = "Cari judul, artis, atau genre")
                 Spacer(Modifier.height(7.dp))
                 InputPanel(value = clientId, onValueChange = { clientId = it }, hint = "Jamendo client_id")
-                InputPanel(value = youtubeApiKey, onValueChange = { youtubeApiKey = it }, hint = "YouTube Data API v3 key")
-                Text("YouTube menambah hasil penemuan dan membuka video di YouTube resmi. Jamendo + Audius menyediakan stream internal jika tersedia. Apple Music tetap katalog.", color = Color(0xFF9AA99D), fontSize = 10.sp)
+                Text("Apple Music untuk penemuan lagu mainstream; Jamendo + Audius untuk stream yang tersedia. ID Jamendo bisa diganti.", color = Color(0xFF9AA99D), fontSize = 10.sp)
                 Spacer(Modifier.height(7.dp))
                 Button(
                     enabled = !busy && catalogQuery.isNotBlank(),
                     onClick = {
                         scope.launch {
                             busy = true
-                            status = "Mencari Apple Music, Jamendo, Audius, dan YouTube..."
+                            status = "Mencari YouTube, Apple Music, Jamendo, dan Audius..."
                             try {
+                                val youtubeResult = runCatching { searchYouTube(catalogQuery.trim()) }
                                 val appleResult = runCatching { searchAppleCatalog(catalogQuery.trim()) }
                                 val jamendoResult = runCatching { if (clientId.isBlank()) emptyList() else searchJamendo(catalogQuery.trim(), clientId.trim()) }
                                 val audiusResult = runCatching { searchAudius(catalogQuery.trim()) }
-                                val youtubeResult = runCatching { if (youtubeApiKey.isBlank()) emptyList() else searchYouTube(catalogQuery.trim(), youtubeApiKey.trim()) }
-                                tracks = (appleResult.getOrDefault(emptyList()) + jamendoResult.getOrDefault(emptyList()) + audiusResult.getOrDefault(emptyList()) + youtubeResult.getOrDefault(emptyList()))
+                                tracks = (youtubeResult.getOrDefault(emptyList()) + appleResult.getOrDefault(emptyList()) + jamendoResult.getOrDefault(emptyList()) + audiusResult.getOrDefault(emptyList()))
                                     .distinctBy { it.title.lowercase() + ":" + it.artist.lowercase() + ":" + it.source }
                                 status = when {
-                                    tracks.isNotEmpty() -> "Ditemukan ${tracks.size} hasil. YouTube/Apple membuka layanan resmi; Jamendo/Audius dapat diputar jika stream tersedia."
-                                    appleResult.isFailure && jamendoResult.isFailure && audiusResult.isFailure && youtubeResult.isFailure -> "Semua katalog gagal diakses. Periksa koneksi internet dan API key YouTube."
+                                    tracks.isNotEmpty() -> "Ditemukan ${tracks.size} hasil. YouTube, Jamendo, dan Audius dapat diputar; Apple Music membuka halaman lagu."
+                                    youtubeResult.isFailure && appleResult.isFailure && jamendoResult.isFailure && audiusResult.isFailure -> "Semua katalog gagal diakses. Periksa koneksi internet."
                                     else -> "Belum ada hasil. Coba kata kunci lain."
                                 }
                             } finally { busy = false }
@@ -163,7 +169,17 @@ fun OnlineMusicScreen(
             items(tracks) { track ->
                 Column(
                     Modifier.fillMaxWidth().clickable {
-                        if (track.audioUrl.isNotBlank()) {
+                        if (track.youtubeUrl.isNotBlank()) {
+                            scope.launch {
+                                status = "Mengambil audio YouTube: ${track.title}..."
+                                try {
+                                    val url = resolveYoutubeAudio(track.youtubeUrl)
+                                    playUrl(url, track.title, track.artist)
+                                } catch (e: Exception) {
+                                    status = "Gagal ambil audio YouTube: ${e.message ?: "coba lagi / update NewPipeExtractor"}"
+                                }
+                            }
+                        } else if (track.audioUrl.isNotBlank()) {
                             playUrl(track.audioUrl, track.title, track.artist)
                         } else if (track.storeUrl.startsWith("https://")) {
                             runCatching {
@@ -176,7 +192,7 @@ fun OnlineMusicScreen(
                 ) {
                     Text(track.title, color = Color(0xFFF1F5F1), fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     Text(
-                        "${track.artist}  ·  ${if (track.durationSeconds > 0) "${track.durationSeconds / 60}:${(track.durationSeconds % 60).toString().padStart(2, '0')}  ·  " else ""}${track.source}${if (track.audioUrl.isBlank()) " · BUKA LAGU" else " · PUTAR"}",
+                        "${track.artist}  ·  ${if (track.durationSeconds > 0) "${track.durationSeconds / 60}:${(track.durationSeconds % 60).toString().padStart(2, '0')}  ·  " else ""}${track.source}${if (track.audioUrl.isBlank() && track.youtubeUrl.isBlank()) " · BUKA LAGU" else " · PUTAR"}",
                         color = Color(0xFF9AA99D), fontSize = 11.sp
                     )
                 }
@@ -255,6 +271,38 @@ private fun InputPanel(value: String, onValueChange: (String) -> Unit, hint: Str
     }
 }
 
+private suspend fun searchYouTube(query: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
+    val yt = ServiceList.YouTube
+    val handler = yt.searchQHFactory.fromQuery(
+        query, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_SONGS), ""
+    )
+    SearchInfo.getInfo(yt, handler).relatedItems
+        .filterIsInstance<StreamInfoItem>()
+        .take(20)
+        .map {
+            OnlineTrack(
+                title = it.name,
+                artist = it.uploaderName ?: "YouTube",
+                audioUrl = "",
+                durationSeconds = it.duration.toInt().coerceAtLeast(0),
+                source = "YouTube",
+                youtubeUrl = it.url
+            )
+        }
+}
+
+// URL stream YouTube kedaluwarsa dalam beberapa jam: selalu ambil ulang saat lagu diputar.
+private suspend fun resolveYoutubeAudio(videoUrl: String): String = withContext(Dispatchers.IO) {
+    val info = StreamInfo.getInfo(ServiceList.YouTube, videoUrl)
+    val progressive = info.audioStreams.filter {
+        it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP
+    }
+    val best = progressive.filter { it.format == MediaFormat.M4A }.maxByOrNull { it.averageBitrate }
+        ?: progressive.maxByOrNull { it.averageBitrate }
+        ?: throw IllegalStateException("tidak ada stream audio")
+    best.content
+}
+
 private suspend fun searchAppleCatalog(query: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
     val encodedQuery = URLEncoder.encode(query, "UTF-8")
     // Search several storefronts to widen regional discovery.
@@ -284,35 +332,6 @@ private suspend fun searchAppleCatalog(query: String): List<OnlineTrack> = withC
         }
     }
     collected.distinctBy { it.title.lowercase() + ":" + it.artist.lowercase() }
-}
-
-private suspend fun searchYouTube(query: String, apiKey: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
-    val encodedQuery = URLEncoder.encode(query, "UTF-8")
-    val encodedKey = URLEncoder.encode(apiKey, "UTF-8")
-    val endpoint = "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=15&q=$encodedQuery&key=$encodedKey"
-    val json = httpGet(endpoint)
-    val results = json.optJSONArray("items") ?: return@withContext emptyList()
-    buildList {
-        for (i in 0 until results.length()) {
-            val item = results.optJSONObject(i) ?: continue
-            val id = item.optJSONObject("id")?.optString("videoId").orEmpty()
-            val snippet = item.optJSONObject("snippet") ?: continue
-            val title = snippet.optString("title")
-            val channel = snippet.optString("channelTitle", "YouTube")
-            if (id.isNotBlank() && title.isNotBlank()) {
-                add(
-                    OnlineTrack(
-                        title = title,
-                        artist = channel,
-                        audioUrl = "",
-                        durationSeconds = 0,
-                        source = "YouTube",
-                        storeUrl = "https://www.youtube.com/watch?v=$id"
-                    )
-                )
-            }
-        }
-    }
 }
 
 private suspend fun searchJamendo(query: String, clientId: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
@@ -388,7 +407,7 @@ private fun httpGet(address: String): JSONObject {
         requestMethod = "GET"
         connectTimeout = 12000
         readTimeout = 15000
-        setRequestProperty("User-Agent", "EnjiwsMusic/1.7 (https://github.com/enjiws/Enjiws-music)")
+        setRequestProperty("User-Agent", "EnjiwsMusic/1.6 (https://github.com/enjiws/Enjiws-music)")
         setRequestProperty("Accept", "application/json")
     }
     try {

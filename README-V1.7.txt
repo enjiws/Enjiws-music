@@ -1,19 +1,23 @@
-ENJIWS MUSIC V1.7 - YOUTUBE DISCOVERY
+ENJIWS MUSIC V1.7 — YOUTUBE SOURCE
 
-What's new:
-- Adds YouTube Data API v3 search to the unified discovery list.
-- YouTube results open in the official YouTube app/site; they are not extracted as audio.
-- Jamendo and Audius remain the in-app audio streaming providers when a playable stream is available.
-- Apple/iTunes remains a discovery catalogue.
-- Existing direct audio URL playback, LRCLIB lyrics, local library and background playback are retained.
+Baru:
+- Pencarian YouTube Music (kategori lagu) lewat NewPipeExtractor, hasil tampil paling atas.
+- Klik hasil YouTube -> audio diambil lalu diputar di Media3 (background play tetap jalan).
+- Sumber lain (Apple, Jamendo, Audius, URL, LRCLIB) tidak diubah.
 
-Setup:
-1. Enable YouTube Data API v3 in Google Cloud Console.
-2. Create an API key and restrict it to YouTube Data API v3.
-3. Do not commit the key to GitHub. Paste it into the YouTube Data API key field inside the app before searching.
-4. If the key previously appeared in a public/shared chat, rotate it and use a newly restricted key.
+File berubah/baru:
+- app/build.gradle.kts (dependency NewPipeExtractor, OkHttp, desugaring, versi 1.7)
+- AndroidManifest.xml (android:name=".EnjiwsApp")
+- OnlineMusic.kt (searchYouTube, resolveYoutubeAudio)
+- BARU: EnjiwsApp.kt, AppDownloader.kt
 
-Notes:
-- YouTube Data API search consumes quota.
-- The app uses official YouTube watch URLs and does not extract audio or bypass ads/DRM.
-- Build has not been executed in this environment; verify with GitHub Actions.
+WAJIB MANUAL (file ini tidak ada di ZIP):
+Buka settings.gradle.kts, di dalam dependencyResolutionManagement { repositories { ... } } tambahkan:
+    maven { url = uri("https://jitpack.io") }
+
+CATATAN:
+- Cek versi terbaru NewPipeExtractor di github.com/TeamNewPipe/NewPipeExtractor/releases,
+  ganti v0.24.6 di build.gradle.kts jika ada yang lebih baru. Jika YouTube berubah
+  dan pencarian/putar gagal, update versi ini dulu.
+- Memakai extractor tidak resmi dan melanggar ToS YouTube. Untuk pemakaian pribadi.
+- Source belum dikompilasi di sini. Jalankan GitHub Actions dan cek hasilnya.
