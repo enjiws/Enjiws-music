@@ -27,7 +27,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.schabi.newpipe.extractor.MediaFormat
 import org.schabi.newpipe.extractor.ServiceList
+import org.schabi.newpipe.extractor.StreamingService
 import org.schabi.newpipe.extractor.search.SearchInfo
+import org.schabi.newpipe.extractor.services.soundcloud.linkHandler.SoundcloudSearchQueryHandlerFactory
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeSearchQueryHandlerFactory
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import org.schabi.newpipe.extractor.stream.StreamInfo
@@ -44,6 +46,7 @@ private data class OnlineTrack(
     val source: String,
     val storeUrl: String = "",
     val youtubeUrl: String = "",
+    val soundcloudUrl: String = "",
     val artworkUrl: String = ""
 )
 
@@ -57,7 +60,7 @@ fun OnlineMusicScreen(controllerProvider: () -> MediaController?) {
     var clientId by remember { mutableStateOf("415f93ab") }
     var streamUrl by remember { mutableStateOf("") }
     var tracks by remember { mutableStateOf<List<OnlineTrack>>(emptyList()) }
-    var status by remember { mutableStateOf("Cari katalog global: YouTube, Apple Music, Jamendo, dan Audius.") }
+    var status by remember { mutableStateOf("Cari katalog global: SoundCloud, YouTube, Apple Music, Jamendo, dan Audius.") }
     var busy by remember { mutableStateOf(false) }
 
     fun playUrl(url: String, title: String, artist: String, artwork: String = "") {
@@ -121,19 +124,20 @@ fun OnlineMusicScreen(controllerProvider: () -> MediaController?) {
                     onClick = {
                         scope.launch {
                             busy = true
-                            status = "Mencari YouTube, Apple Music, Jamendo, dan Audius..."
+                            status = "Mencari SoundCloud, YouTube, Apple Music, Jamendo, dan Audius..."
                             try {
                                 val q = catalogQuery.trim()
+                                val soundcloudResult = runCatching { searchSoundCloud(q) }
                                 val youtubeResult = runCatching { searchYouTube(q) }
                                 val appleResult = runCatching { searchAppleCatalog(q) }
                                 val jamendoResult = runCatching { if (clientId.isBlank()) emptyList() else searchJamendo(q, clientId.trim()) }
                                 val audiusResult = runCatching { searchAudius(q) }
-                                tracks = (youtubeResult.getOrDefault(emptyList()) + appleResult.getOrDefault(emptyList()) +
+                                tracks = (soundcloudResult.getOrDefault(emptyList()) + youtubeResult.getOrDefault(emptyList()) + appleResult.getOrDefault(emptyList()) +
                                     jamendoResult.getOrDefault(emptyList()) + audiusResult.getOrDefault(emptyList()))
                                     .distinctBy { it.title.lowercase() + ":" + it.artist.lowercase() + ":" + it.source }
                                 status = when {
-                                    tracks.isNotEmpty() -> "Ditemukan ${tracks.size} hasil. YouTube, Jamendo, dan Audius dapat diputar; Apple Music membuka halaman lagu."
-                                    youtubeResult.isFailure && appleResult.isFailure && jamendoResult.isFailure && audiusResult.isFailure -> "Semua katalog gagal diakses. Periksa koneksi internet."
+                                    tracks.isNotEmpty() -> "Ditemukan ${tracks.size} hasil. SoundCloud, YouTube, Jamendo, dan Audius dapat diputar; Apple Music membuka halaman lagu."
+                                    soundcloudResult.isFailure && youtubeResult.isFailure && appleResult.isFailure && jamendoResult.isFailure && audiusResult.isFailure -> "Semua katalog gagal diakses. Periksa koneksi internet."
                                     else -> "Belum ada hasil. Coba kata kunci lain."
                                 }
                             } finally { busy = false }
@@ -148,11 +152,21 @@ fun OnlineMusicScreen(controllerProvider: () -> MediaController?) {
             items(tracks) { track ->
                 Row(
                     Modifier.fillMaxWidth().clickable {
-                        if (track.youtubeUrl.isNotBlank()) {
+                        if (track.soundcloudUrl.isNotBlank()) {
+                            scope.launch {
+                                status = "Mengambil audio SoundCloud: ${track.title}..."
+                                try {
+                                    val url = resolveStreamAudio(ServiceList.SoundCloud, track.soundcloudUrl)
+                                    playUrl(url, track.title, track.artist, track.artworkUrl)
+                                } catch (e: Exception) {
+                                    status = "Gagal ambil audio SoundCloud: ${e.message ?: "coba lagi"}"
+                                }
+                            }
+                        } else if (track.youtubeUrl.isNotBlank()) {
                             scope.launch {
                                 status = "Mengambil audio YouTube: ${track.title}..."
                                 try {
-                                    val url = resolveYoutubeAudio(track.youtubeUrl)
+                                    val url = resolveStreamAudio(ServiceList.YouTube, track.youtubeUrl)
                                     playUrl(url, track.title, track.artist, track.artworkUrl)
                                 } catch (e: Exception) {
                                     status = "Gagal ambil audio YouTube: ${e.message ?: "coba lagi / update NewPipeExtractor"}"
@@ -173,7 +187,7 @@ fun OnlineMusicScreen(controllerProvider: () -> MediaController?) {
                     Column(Modifier.weight(1f)) {
                         Text(track.title, color = Color(0xFFF1F5F1), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                         Text(
-                            "${track.artist}  ·  ${if (track.durationSeconds > 0) "${track.durationSeconds / 60}:${(track.durationSeconds % 60).toString().padStart(2, '0')}  ·  " else ""}${track.source}${if (track.audioUrl.isBlank() && track.youtubeUrl.isBlank()) " · BUKA LAGU" else " · PUTAR"}",
+                            "${track.artist}  ·  ${if (track.durationSeconds > 0) "${track.durationSeconds / 60}:${(track.durationSeconds % 60).toString().padStart(2, '0')}  ·  " else ""}${track.source}${if (track.audioUrl.isBlank() && track.youtubeUrl.isBlank() && track.soundcloudUrl.isBlank()) " · BUKA LAGU" else " · PUTAR"}",
                             color = Color(0xFF9AA99D), fontSize = 11.sp, maxLines = 1
                         )
                     }
@@ -225,19 +239,41 @@ private suspend fun searchYouTube(query: String): List<OnlineTrack> = withContex
         }
 }
 
-// URL stream YouTube kedaluwarsa dalam beberapa jam: selalu ambil ulang saat lagu diputar.
-private suspend fun resolveYoutubeAudio(videoUrl: String): String = withContext(Dispatchers.IO) {
-    val info = StreamInfo.getInfo(ServiceList.YouTube, videoUrl)
+// URL stream kedaluwarsa dalam beberapa jam: selalu ambil ulang saat lagu diputar.
+private suspend fun resolveStreamAudio(service: StreamingService, pageUrl: String): String = withContext(Dispatchers.IO) {
+    val info = StreamInfo.getInfo(service, pageUrl)
     val all = info.audioStreams
     val usable = all.filter { it.isUrl }
     val progressive = usable.filter { it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
-    val best = progressive.filter { it.format == MediaFormat.M4A }.maxByOrNull { it.averageBitrate }
+    val best = progressive.filter { it.format == MediaFormat.M4A || it.format == MediaFormat.MP3 }
+        .maxByOrNull { it.averageBitrate }
         ?: progressive.maxByOrNull { it.averageBitrate }
         ?: usable.maxByOrNull { it.averageBitrate }
         ?: throw IllegalStateException(
             "audio=${all.size}, url=${usable.size}, hls=${!info.hlsUrl.isNullOrBlank()}, dash=${!info.dashMpdUrl.isNullOrBlank()}"
         )
     best.content
+}
+
+private suspend fun searchSoundCloud(query: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
+    val sc = ServiceList.SoundCloud
+    val handler = sc.searchQHFactory.fromQuery(
+        query, listOf(SoundcloudSearchQueryHandlerFactory.TRACKS), ""
+    )
+    SearchInfo.getInfo(sc, handler).relatedItems
+        .filterIsInstance<StreamInfoItem>()
+        .take(20)
+        .map {
+            OnlineTrack(
+                title = it.name,
+                artist = it.uploaderName ?: "SoundCloud",
+                audioUrl = "",
+                durationSeconds = it.duration.toInt().coerceAtLeast(0),
+                source = "SoundCloud",
+                soundcloudUrl = it.url,
+                artworkUrl = it.thumbnails.maxByOrNull { img -> img.height }?.url.orEmpty()
+            )
+        }
 }
 
 private suspend fun searchAppleCatalog(query: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
