@@ -54,6 +54,7 @@ fun OnlineMusicScreen(
     val context = LocalContext.current
     var catalogQuery by remember { mutableStateOf("") }
     var clientId by remember { mutableStateOf("415f93ab") }
+    var youtubeApiKey by remember { mutableStateOf("") }
     var streamUrl by remember { mutableStateOf("") }
     var tracks by remember { mutableStateOf<List<OnlineTrack>>(emptyList()) }
     var lyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
@@ -129,23 +130,25 @@ fun OnlineMusicScreen(
                 InputPanel(value = catalogQuery, onValueChange = { catalogQuery = it }, hint = "Cari judul, artis, atau genre")
                 Spacer(Modifier.height(7.dp))
                 InputPanel(value = clientId, onValueChange = { clientId = it }, hint = "Jamendo client_id")
-                Text("Apple Music untuk penemuan lagu mainstream; Jamendo + Audius untuk stream yang tersedia. ID Jamendo bisa diganti.", color = Color(0xFF9AA99D), fontSize = 10.sp)
+                InputPanel(value = youtubeApiKey, onValueChange = { youtubeApiKey = it }, hint = "YouTube Data API v3 key")
+                Text("YouTube menambah hasil penemuan dan membuka video di YouTube resmi. Jamendo + Audius menyediakan stream internal jika tersedia. Apple Music tetap katalog.", color = Color(0xFF9AA99D), fontSize = 10.sp)
                 Spacer(Modifier.height(7.dp))
                 Button(
                     enabled = !busy && catalogQuery.isNotBlank(),
                     onClick = {
                         scope.launch {
                             busy = true
-                            status = "Mencari Apple Music, Jamendo, dan Audius..."
+                            status = "Mencari Apple Music, Jamendo, Audius, dan YouTube..."
                             try {
                                 val appleResult = runCatching { searchAppleCatalog(catalogQuery.trim()) }
                                 val jamendoResult = runCatching { if (clientId.isBlank()) emptyList() else searchJamendo(catalogQuery.trim(), clientId.trim()) }
                                 val audiusResult = runCatching { searchAudius(catalogQuery.trim()) }
-                                tracks = (appleResult.getOrDefault(emptyList()) + jamendoResult.getOrDefault(emptyList()) + audiusResult.getOrDefault(emptyList()))
+                                val youtubeResult = runCatching { if (youtubeApiKey.isBlank()) emptyList() else searchYouTube(catalogQuery.trim(), youtubeApiKey.trim()) }
+                                tracks = (appleResult.getOrDefault(emptyList()) + jamendoResult.getOrDefault(emptyList()) + audiusResult.getOrDefault(emptyList()) + youtubeResult.getOrDefault(emptyList()))
                                     .distinctBy { it.title.lowercase() + ":" + it.artist.lowercase() + ":" + it.source }
                                 status = when {
-                                    tracks.isNotEmpty() -> "Ditemukan ${tracks.size} hasil. Apple Music membuka halaman lagu; Jamendo/Audius dapat diputar jika stream tersedia."
-                                    appleResult.isFailure && jamendoResult.isFailure && audiusResult.isFailure -> "Semua katalog gagal diakses. Periksa koneksi internet."
+                                    tracks.isNotEmpty() -> "Ditemukan ${tracks.size} hasil. YouTube/Apple membuka layanan resmi; Jamendo/Audius dapat diputar jika stream tersedia."
+                                    appleResult.isFailure && jamendoResult.isFailure && audiusResult.isFailure && youtubeResult.isFailure -> "Semua katalog gagal diakses. Periksa koneksi internet dan API key YouTube."
                                     else -> "Belum ada hasil. Coba kata kunci lain."
                                 }
                             } finally { busy = false }
@@ -283,6 +286,35 @@ private suspend fun searchAppleCatalog(query: String): List<OnlineTrack> = withC
     collected.distinctBy { it.title.lowercase() + ":" + it.artist.lowercase() }
 }
 
+private suspend fun searchYouTube(query: String, apiKey: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
+    val encodedQuery = URLEncoder.encode(query, "UTF-8")
+    val encodedKey = URLEncoder.encode(apiKey, "UTF-8")
+    val endpoint = "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=15&q=$encodedQuery&key=$encodedKey"
+    val json = httpGet(endpoint)
+    val results = json.optJSONArray("items") ?: return@withContext emptyList()
+    buildList {
+        for (i in 0 until results.length()) {
+            val item = results.optJSONObject(i) ?: continue
+            val id = item.optJSONObject("id")?.optString("videoId").orEmpty()
+            val snippet = item.optJSONObject("snippet") ?: continue
+            val title = snippet.optString("title")
+            val channel = snippet.optString("channelTitle", "YouTube")
+            if (id.isNotBlank() && title.isNotBlank()) {
+                add(
+                    OnlineTrack(
+                        title = title,
+                        artist = channel,
+                        audioUrl = "",
+                        durationSeconds = 0,
+                        source = "YouTube",
+                        storeUrl = "https://www.youtube.com/watch?v=$id"
+                    )
+                )
+            }
+        }
+    }
+}
+
 private suspend fun searchJamendo(query: String, clientId: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
     val encodedQuery = URLEncoder.encode(query, "UTF-8")
     val encodedId = URLEncoder.encode(clientId, "UTF-8")
@@ -356,7 +388,7 @@ private fun httpGet(address: String): JSONObject {
         requestMethod = "GET"
         connectTimeout = 12000
         readTimeout = 15000
-        setRequestProperty("User-Agent", "EnjiwsMusic/1.6 (https://github.com/enjiws/Enjiws-music)")
+        setRequestProperty("User-Agent", "EnjiwsMusic/1.7 (https://github.com/enjiws/Enjiws-music)")
         setRequestProperty("Accept", "application/json")
     }
     try {
