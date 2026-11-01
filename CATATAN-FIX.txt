@@ -1,0 +1,44 @@
+PERBAIKAN BUILD FAILED (:app:compileDebugKotlin)
+================================================
+
+PENYEBAB YANG PALING MUNGKIN:
+1. File sebelumnya memakai Icons.Filled.* (ikon unduh + semua ikon layar
+   Now Playing). Kalau project tidak punya dependency material-icons,
+   semua referensi itu gagal compile.
+2. Nama LyricLine / RepeatMode / NowPlayingScreen bisa bentrok dengan
+   kode layar Now Playing lama di package yang sama.
+
+YANG DIUBAH DI ZIP INI:
+- OnlineMusic.kt: tombol unduh ikon diganti tombol teks "UNDUH"
+  (tidak butuh dependency ikon sama sekali).
+- NowPlayingScreen.kt: SEMUA ikon diganti glyph teks (‹ ••• ▶ ❚❚
+  ⏮ ⏭ ⇄ ↻), dan semua deklarasi publik diganti nama unik:
+    LyricLine -> NpLyricLine
+    RepeatMode -> NpRepeatMode
+    NowPlayingScreen -> NowPlayingScreenNew
+    NowPlayingScreenFromController -> NowPlayingScreenFromControllerNew
+  Jadi tidak ada lagi dependency ikon baru dan tidak bisa bentrok
+  dengan kode lama.
+
+CARA PAKAI:
+  File di zip ini namanya SAMA dengan file sebelumnya, jadi cukup:
+    cd ~/EnjiwsMusicNew
+    unzip -o ~/storage/downloads/EnjiwsMusic_Fix_Build.zip
+    git add .
+    git commit -m "Fix build: remove icon dependency, rename declarations"
+    git push origin main
+  (unzip -o menimpa file lama dengan versi perbaikan ini.)
+
+  Pemanggilan layar Now Playing sekarang memakai nama baru:
+    NowPlayingScreenFromControllerNew(controllerProvider, lyrics, onBack, onMore)
+
+KALAU MASIH GAGAL:
+  Buka log job "Build debug APK" yang gagal, scroll ke ATAS, cari baris
+  yang diawali "e:" (misal: e: ...OnlineMusic.kt: (123, 5): ...).
+  Kirim baris-baris "e:" itu ke aku — dari situ ketahuan persis file,
+  nomor baris, dan penyebabnya.
+
+ALTERNATIF (kalau mau ikon vektor asli):
+  Tambahkan ini ke dependencies di app/build.gradle.kts:
+    implementation("androidx.compose.material:material-icons-extended:1.7.8")
+  lalu bilang ke aku, nanti aku kembalikan versi ikonnya.

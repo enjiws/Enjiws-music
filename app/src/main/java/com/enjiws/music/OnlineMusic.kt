@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Environment
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -229,8 +228,8 @@ fun OnlineMusicScreen(controllerProvider: () -> MediaController?) {
                         )
                     }
                     if (track.audioUrl.isNotBlank() || track.youtubeUrl.isNotBlank() || track.soundcloudUrl.isNotBlank()) {
-                        IconButton(onClick = { downloadTrack(track) }) {
-                            Icon(Icons.Filled.Download, contentDescription = "Unduh", tint = Color(0xFF91D6A0))
+                        TextButton(onClick = { downloadTrack(track) }) {
+                            Text("UNDUH", color = Color(0xFF91D6A0), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
