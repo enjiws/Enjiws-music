@@ -228,12 +228,15 @@ private suspend fun searchYouTube(query: String): List<OnlineTrack> = withContex
 // URL stream YouTube kedaluwarsa dalam beberapa jam: selalu ambil ulang saat lagu diputar.
 private suspend fun resolveYoutubeAudio(videoUrl: String): String = withContext(Dispatchers.IO) {
     val info = StreamInfo.getInfo(ServiceList.YouTube, videoUrl)
-    val progressive = info.audioStreams.filter {
-        it.isUrl && it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP
-    }
+    val all = info.audioStreams
+    val usable = all.filter { it.isUrl }
+    val progressive = usable.filter { it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
     val best = progressive.filter { it.format == MediaFormat.M4A }.maxByOrNull { it.averageBitrate }
         ?: progressive.maxByOrNull { it.averageBitrate }
-        ?: throw IllegalStateException("tidak ada stream audio")
+        ?: usable.maxByOrNull { it.averageBitrate }
+        ?: throw IllegalStateException(
+            "audio=${all.size}, url=${usable.size}, hls=${!info.hlsUrl.isNullOrBlank()}, dash=${!info.dashMpdUrl.isNullOrBlank()}"
+        )
     best.content
 }
 
