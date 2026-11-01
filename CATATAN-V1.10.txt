@@ -1,0 +1,28 @@
+ENJIWS MUSIC V1.10 — FITUR UNDUH (YT CONVERT)
+==============================================
+
+File yang berubah: app/src/main/java/com/enjiws/music/OnlineMusic.kt
+(Berbasis V1.9 yang sudah diperbaiki: Audius app_name + diagnosis HLS.)
+
+YANG BARU:
+- Tiap lagu di hasil pencarian (SoundCloud, YouTube, Jamendo, Audius)
+  kini punya tombol ikon unduh di ujung kanan baris lagu.
+- Ketuk tombol itu: aplikasi mengambil URL audio (sama seperti saat
+  memutar), lalu mengunduh lewat DownloadManager Android.
+- File tersimpan di folder Musik/ENJIWS dengan nama
+  "Artis - Judul.m4a/mp3" (ekstensi mengikuti format asli).
+- Unduhan jalan di background dengan notifikasi progres dari sistem,
+  jadi kamu tetap bisa sambil memutar lagu lain.
+- Lagu Apple Music tidak punya tombol unduh (hanya membuka halaman lagu).
+
+TIDAK PERLU PERMISSION TAMBAHAN:
+- DownloadManager ke folder publik tidak butuh izin penyimpanan di
+  Android 10+. Kalau target SDK di bawah itu, tambahkan
+  WRITE_EXTERNAL_STORAGE di manifest.
+
+CATATAN:
+- URL audio YouTube/SoundCloud kedaluwarsa dalam beberapa jam, tapi itu
+  tidak masalah karena unduhan langsung dimulai saat tombol ditekan.
+- Mengunduh konten YouTube bisa melanggar Ketentuan Layanan YouTube;
+  gunakan untuk pemakaian pribadi dan konten yang kamu punya haknya.
+- File ini belum dikompilasi di sini; cek hasil GitHub Actions seperti biasa.

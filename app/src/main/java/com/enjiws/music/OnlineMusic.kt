@@ -1,7 +1,11 @@
 package com.enjiws.music
 
+import android.app.DownloadManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Environment
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -84,6 +88,38 @@ fun OnlineMusicScreen(controllerProvider: () -> MediaController?) {
         }
     }
 
+    // Unduh lagu ke folder Musik/ENJIWS lewat DownloadManager (jalan di
+    // background, jadi tetap bisa sambil memutar lagu lain).
+    fun downloadTrack(track: OnlineTrack) {
+        scope.launch {
+            try {
+                status = "Menyiapkan unduhan: ${track.title}..."
+                val (url, ext) = when {
+                    track.soundcloudUrl.isNotBlank() ->
+                        resolveStreamAudioDetailed(ServiceList.SoundCloud, track.soundcloudUrl)
+                    track.youtubeUrl.isNotBlank() ->
+                        resolveStreamAudioDetailed(ServiceList.YouTube, track.youtubeUrl)
+                    track.audioUrl.isNotBlank() -> track.audioUrl to "mp3"
+                    else -> {
+                        status = "Lagu ini tidak bisa diunduh."
+                        return@launch
+                    }
+                }
+                val fileName = sanitizeFileName("${track.artist} - ${track.title}") + ".$ext"
+                val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                val request = DownloadManager.Request(Uri.parse(url))
+                    .setTitle(track.title)
+                    .setDescription("ENJIWS Music")
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_MUSIC, "ENJIWS/$fileName")
+                dm.enqueue(request)
+                status = "Mengunduh: ${track.title} (cek notifikasi, tersimpan di Musik/ENJIWS)"
+            } catch (e: Exception) {
+                status = "Gagal mengunduh: ${e.message ?: "coba lagi"}"
+            }
+        }
+    }
+
     Column(
         Modifier.fillMaxSize().background(Color(0xFF0D120F)).padding(horizontal = 18.dp, vertical = 14.dp)
     ) {
@@ -147,6 +183,7 @@ fun OnlineMusicScreen(controllerProvider: () -> MediaController?) {
                     modifier = Modifier.fillMaxWidth()
                 ) { Text(if (busy) "MENCARI..." else "CARI DI SEMUA KATALOG", color = Color(0xFF91D6A0)) }
                 Text(status, color = Color(0xFF9AA99D), fontSize = 11.sp)
+                Text("Ketuk ikon unduh pada lagu untuk menyimpan file ke folder Musik/ENJIWS.", color = Color(0xFF9AA99D), fontSize = 10.sp)
                 Spacer(Modifier.height(8.dp))
             }
             items(tracks) { track ->
@@ -190,6 +227,11 @@ fun OnlineMusicScreen(controllerProvider: () -> MediaController?) {
                             "${track.artist}  ·  ${if (track.durationSeconds > 0) "${track.durationSeconds / 60}:${(track.durationSeconds % 60).toString().padStart(2, '0')}  ·  " else ""}${track.source}${if (track.audioUrl.isBlank() && track.youtubeUrl.isBlank() && track.soundcloudUrl.isBlank()) " · BUKA LAGU" else " · PUTAR"}",
                             color = Color(0xFF9AA99D), fontSize = 11.sp, maxLines = 1
                         )
+                    }
+                    if (track.audioUrl.isNotBlank() || track.youtubeUrl.isNotBlank() || track.soundcloudUrl.isNotBlank()) {
+                        IconButton(onClick = { downloadTrack(track) }) {
+                            Icon(Icons.Filled.Download, contentDescription = "Unduh", tint = Color(0xFF91D6A0))
+                        }
                     }
                 }
                 HorizontalDivider(color = Color(0xFF253129))
@@ -241,25 +283,35 @@ private suspend fun searchYouTube(query: String): List<OnlineTrack> = withContex
 
 // URL stream kedaluwarsa dalam beberapa jam: selalu ambil ulang saat lagu diputar.
 private suspend fun resolveStreamAudio(service: StreamingService, pageUrl: String): String = withContext(Dispatchers.IO) {
-    val extractor = service.getStreamExtractor(pageUrl)
-    extractor.fetchPage()
-    val all = try {
-        extractor.audioStreams
-    } catch (e: Exception) {
-        val c = e.cause
-        throw IllegalStateException(
-            "${e.javaClass.simpleName}: ${e.message}" + (if (c != null) " | ${c.javaClass.simpleName}: ${c.message}" else "")
-        )
-    }
+    resolveStreamAudioDetailed(service, pageUrl).first
+}
+
+// Sama seperti resolveStreamAudio, tapi ikut mengembalikan ekstensi file
+// (m4a/mp3/dll) supaya hasil unduhan tersimpan dengan format yang benar.
+private suspend fun resolveStreamAudioDetailed(service: StreamingService, pageUrl: String): Pair<String, String> = withContext(Dispatchers.IO) {
+    val info = StreamInfo.getInfo(service, pageUrl)
+    val all = info.audioStreams
     val usable = all.filter { it.isUrl }
     val progressive = usable.filter { it.deliveryMethod == DeliveryMethod.PROGRESSIVE_HTTP }
     val best = progressive.filter { it.format == MediaFormat.M4A || it.format == MediaFormat.MP3 }
         .maxByOrNull { it.averageBitrate }
         ?: progressive.maxByOrNull { it.averageBitrate }
-        ?: usable.maxByOrNull { it.averageBitrate }
-        ?: throw IllegalStateException("audio=${all.size}, url=${usable.size}")
-    best.content
+        ?: throw IllegalStateException(
+            if (usable.isNotEmpty()) "Hanya tersedia stream HLS/DASH (butuh modul media3-exoplayer-hls)"
+            else "audio=${all.size}, url=${usable.size}, hls=${!info.hlsUrl.isNullOrBlank()}, dash=${!info.dashMpdUrl.isNullOrBlank()}"
+        )
+    val ext = when (best.format) {
+        MediaFormat.M4A -> "m4a"
+        MediaFormat.MP3 -> "mp3"
+        MediaFormat.WEBMA -> "webm"
+        MediaFormat.OPUS -> "opus"
+        else -> "mp3"
+    }
+    best.content to ext
 }
+
+private fun sanitizeFileName(name: String): String =
+    name.replace(Regex("[\\\\/:*?\"<>|]"), "-").trim().ifBlank { "track" }.take(100)
 
 private suspend fun searchSoundCloud(query: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
     val sc = ServiceList.SoundCloud
@@ -339,7 +391,7 @@ private suspend fun searchJamendo(query: String, clientId: String): List<OnlineT
 
 private suspend fun searchAudius(query: String): List<OnlineTrack> = withContext(Dispatchers.IO) {
     val encodedQuery = URLEncoder.encode(query, "UTF-8")
-    val endpoint = "https://api.audius.co/v1/tracks/search?query=$encodedQuery&limit=20&sort_method=relevant"
+    val endpoint = "https://api.audius.co/v1/tracks/search?query=$encodedQuery&limit=20&sort_method=relevant&app_name=EnjiwsMusic"
     val json = httpGet(endpoint)
     val results = json.optJSONArray("data") ?: return@withContext emptyList()
     buildList {
@@ -353,7 +405,7 @@ private suspend fun searchAudius(query: String): List<OnlineTrack> = withContext
                 OnlineTrack(
                     title = item.optString("title", "Unknown title"),
                     artist = user?.optString("name", "Unknown artist") ?: "Unknown artist",
-                    audioUrl = "https://api.audius.co/v1/tracks/$id/stream",
+                    audioUrl = "https://api.audius.co/v1/tracks/$id/stream?app_name=EnjiwsMusic",
                     durationSeconds = item.optInt("duration", 0),
                     source = "Audius",
                     artworkUrl = artwork?.let { a -> a.str("480x480").ifBlank { a.str("150x150") } }.orEmpty()
