@@ -35,6 +35,13 @@ private data class JamendoTrack(
     val durationSeconds: Int
 )
 
+private data class AudiusTrack(
+    val id: String,
+    val title: String,
+    val artist: String,
+    val durationSeconds: Int
+)
+
 private data class LyricLine(val timeMs: Long, val text: String)
 
 @Composable
@@ -51,6 +58,7 @@ fun OnlineMusicScreen(
     var clientId by remember { mutableStateOf("709fa152") }
     var streamUrl by remember { mutableStateOf("") }
     var tracks by remember { mutableStateOf<List<JamendoTrack>>(emptyList()) }
+    var audiusTracks by remember { mutableStateOf<List<AudiusTrack>>(emptyList()) }
     var lyrics by remember { mutableStateOf<List<LyricLine>>(emptyList()) }
     var plainLyrics by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("Cari musik dari katalog Jamendo atau tempel URL audio langsung.") }
@@ -126,23 +134,70 @@ fun OnlineMusicScreen(
                 InputPanel(value = clientId, onValueChange = { clientId = it }, hint = "Jamendo client_id")
                 Text("ID 709fa152 adalah ID uji coba dari dokumentasi Jamendo. Untuk pemakaian aplikasi sendiri, daftarkan client_id milikmu.", color = Color(0xFF9AA99D), fontSize = 10.sp)
                 Spacer(Modifier.height(7.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        enabled = !busy && catalogQuery.isNotBlank(),
+                        onClick = {
+                            scope.launch {
+                                busy = true
+                                status = "Mencari katalog global..."
+                                tracks = emptyList()
+                                audiusTracks = emptyList()
+                                try {
+                                    val jamendoResult = runCatching { searchJamendo(catalogQuery.trim(), clientId.trim()) }
+                                    val audiusResult = runCatching { searchAudius(catalogQuery.trim()) }
+                                    tracks = jamendoResult.getOrDefault(emptyList())
+                                    audiusTracks = audiusResult.getOrDefault(emptyList())
+                                    val total = tracks.size + audiusTracks.size
+                                    status = when {
+                                        total > 0 -> "Global: $total hasil · Jamendo ${tracks.size} · Audius ${audiusTracks.size}"
+                                        jamendoResult.isFailure && audiusResult.isFailure -> "Kedua katalog gagal diakses. Periksa koneksi internet."
+                                        else -> "Belum ada hasil. Coba kata kunci lain."
+                                    }
+                                } finally { busy = false }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF91D6A0)),
+                        modifier = Modifier.weight(1f)
+                    ) { Text(if (busy) "..." else "GLOBAL", color = Color(0xFF0D120F), fontWeight = FontWeight.Bold) }
+                    Button(
+                        enabled = !busy && catalogQuery.isNotBlank(),
+                        onClick = {
+                            scope.launch {
+                                busy = true
+                                status = "Mencari di Audius..."
+                                tracks = emptyList()
+                                try {
+                                    audiusTracks = searchAudius(catalogQuery.trim())
+                                    status = "Audius: ${audiusTracks.size} hasil."
+                                } catch (e: Exception) {
+                                    status = "Audius gagal: ${e.message ?: "periksa koneksi"}"
+                                } finally { busy = false }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF20382A)),
+                        modifier = Modifier.weight(1f)
+                    ) { Text("AUDIUS", color = Color(0xFF91D6A0)) }
+                }
+                Spacer(Modifier.height(6.dp))
                 Button(
                     enabled = !busy && catalogQuery.isNotBlank() && clientId.isNotBlank(),
                     onClick = {
                         scope.launch {
                             busy = true
-                            status = "Mencari katalog..."
+                            status = "Mencari di Jamendo..."
+                            audiusTracks = emptyList()
                             try {
                                 tracks = searchJamendo(catalogQuery.trim(), clientId.trim())
-                                status = if (tracks.isEmpty()) "Tidak ada hasil. Coba kata kunci lain atau periksa client_id." else "Ditemukan ${tracks.size} lagu."
+                                status = "Jamendo: ${tracks.size} hasil."
                             } catch (e: Exception) {
-                                status = "Pencarian gagal: ${e.message ?: "periksa koneksi internet"}"
+                                status = "Jamendo gagal: ${e.message ?: "periksa client_id"}"
                             } finally { busy = false }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF20382A)),
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(if (busy) "MENCARI..." else "CARI MUSIK", color = Color(0xFF91D6A0)) }
+                ) { Text("JAMENDO SAJA", color = Color(0xFF91D6A0)) }
                 Text(status, color = Color(0xFF9AA99D), fontSize = 11.sp)
                 Spacer(Modifier.height(8.dp))
             }
@@ -154,6 +209,19 @@ fun OnlineMusicScreen(
                 ) {
                     Text(track.title, color = Color(0xFFF1F5F1), fontSize = 14.sp, fontWeight = FontWeight.Medium)
                     Text("${track.artist}  ·  ${track.durationSeconds / 60}:${(track.durationSeconds % 60).toString().padStart(2, '0')}  ·  Ketuk untuk putar",
+                        color = Color(0xFF9AA99D), fontSize = 11.sp)
+                }
+                HorizontalDivider(color = Color(0xFF253129))
+            }
+            items(audiusTracks) { track ->
+                Column(
+                    Modifier.fillMaxWidth().clickable {
+                        val stream = "https://api.audius.co/v1/tracks/${track.id}/stream"
+                        playUrl(stream, track.title, track.artist)
+                    }.padding(vertical = 10.dp)
+                ) {
+                    Text(track.title, color = Color(0xFFF1F5F1), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text("${track.artist}  ·  ${track.durationSeconds / 60}:${(track.durationSeconds % 60).toString().padStart(2, '0')}  ·  AUDIUS · Ketuk untuk putar",
                         color = Color(0xFF9AA99D), fontSize = 11.sp)
                 }
                 HorizontalDivider(color = Color(0xFF253129))
@@ -253,6 +321,30 @@ private suspend fun searchJamendo(query: String, clientId: String): List<Jamendo
     }
 }
 
+private suspend fun searchAudius(query: String): List<AudiusTrack> = withContext(Dispatchers.IO) {
+    val encodedQuery = URLEncoder.encode(query, "UTF-8")
+    val endpoint = "https://api.audius.co/v1/tracks/search?query=$encodedQuery&limit=20"
+    val json = httpGet(endpoint)
+    val results = json.optJSONArray("data") ?: return@withContext emptyList()
+    buildList {
+        for (i in 0 until results.length()) {
+            val item = results.optJSONObject(i) ?: continue
+            val id = item.optString("id").takeIf { it.isNotBlank() && it != "null" } ?: continue
+            val user = item.optJSONObject("user")
+            val title = item.optString("title", "Unknown title")
+            val artist = user?.optString("name", "Unknown artist") ?: "Unknown artist"
+            add(
+                AudiusTrack(
+                    id = id,
+                    title = title,
+                    artist = artist,
+                    durationSeconds = item.optInt("duration", 0)
+                )
+            )
+        }
+    }
+}
+
 private suspend fun findLyrics(title: String, artist: String, durationMs: Long): Pair<List<LyricLine>, String> = withContext(Dispatchers.IO) {
     val params = "track_name=${URLEncoder.encode(title, "UTF-8")}&artist_name=${URLEncoder.encode(artist, "UTF-8")}" +
         if (durationMs > 0L) "&duration=${durationMs / 1000L}" else ""
@@ -277,7 +369,7 @@ private fun httpGet(address: String): JSONObject {
         requestMethod = "GET"
         connectTimeout = 12000
         readTimeout = 15000
-        setRequestProperty("User-Agent", "EnjiwsMusic/1.4 (https://github.com/enjiws/Enjiws-music)")
+        setRequestProperty("User-Agent", "EnjiwsMusic/1.5 (https://github.com/enjiws/Enjiws-music)")
         setRequestProperty("Accept", "application/json")
     }
     try {
